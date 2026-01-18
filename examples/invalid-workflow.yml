@@ -1,0 +1,19 @@
+name: Example Invalid Workflow
+
+# Missing required 'on' trigger
+
+jobs:
+  build:
+    # Missing required 'runs-on'
+    steps:
+      # Missing 'run' or 'uses'
+      - name: Invalid step
+
+  test:
+    runs-on: ubuntu-latest
+    permissions:
+      invalid-scope: read  # Invalid permission scope
+    strategy:
+      matrix: "not-a-dict"  # Should be a mapping
+    steps:
+      - run: echo "test"
