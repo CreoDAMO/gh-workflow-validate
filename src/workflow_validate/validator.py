@@ -13,6 +13,7 @@ from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError, MarkedYAMLError
 
 # Type definitions (unchanged)
+
 class ValidationError(TypedDict):
     line: int
     type: str
@@ -127,7 +128,7 @@ class YAMLValidator:
             struct['has_jobs'] = 'jobs' in data
             struct['has_env'] = 'env' in data
             
-            jobs = data.get('jobs') or {}  # Fix 1: Normalize to {} if None
+            jobs = data.get('jobs') or {}  # Normalize to {} if None
             struct['has_permissions'] = 'permissions' in data or any(isinstance(job, dict) and 'permissions' in job for job in jobs.values())
             
             if 'jobs' in data:
@@ -199,7 +200,7 @@ class YAMLValidator:
                 'message': 'No workflow trigger (on:) - workflow may not run automatically'
             })
         
-        # Fix 3: Explicitly enforce validity based only on errors (warnings don't count)
+        # Explicitly enforce validity based only on errors (warnings don't count)
         result['valid'] = len(result['errors']) == 0
         
         return result
@@ -221,9 +222,12 @@ class YAMLValidator:
         if 'jobs' not in data:
             errors.append({'line': 0, 'type': 'MissingJobs', 'message': 'Required "jobs" section missing', 'severity': 'ERROR'})
         else:
-            jobs = data['jobs']
+            jobs = data.get('jobs') or {}  # Normalize to {} if None
             if not isinstance(jobs, dict):
                 errors.append({'line': 0, 'type': 'InvalidJobs', 'message': '"jobs" must be a mapping of job IDs to jobs', 'severity': 'ERROR'})
+            elif not jobs:
+                # Early return for empty jobs: schema valid, warning handled elsewhere
+                return errors
             else:
                 for job_id, job in jobs.items():
                     if not isinstance(job, dict):
@@ -267,7 +271,7 @@ class YAMLValidator:
         
         if isinstance(perms, str):
             if perms not in {'read-all', 'write-all'}:
-                errors.append({'line': 0, 'type': 'InvalidPermissions', 'message': f'Invalid permissions shorthand in {context}: must be "read-all" or "write-all"', 'severity': 'ERROR'})
+                errors.append({'line': 0, 'type': 'InvalidPermissionsType', 'message': f'Invalid permissions shorthand in {context}: must be "read-all" or "write-all"', 'severity': 'ERROR'})
         elif isinstance(perms, dict):
             seen_scopes = set()
             for scope, level in perms.items():
@@ -279,7 +283,7 @@ class YAMLValidator:
                 if level not in VALID_LEVELS:
                     errors.append({'line': 0, 'type': 'InvalidLevel', 'message': f'Invalid level "{level}" for scope "{scope}" in {context}: must be read/write/none', 'severity': 'ERROR'})
         else:
-            errors.append({'line': 0, 'type': 'InvalidPermissionsType', 'message': f'Permissions in {context} must be a mapping or "read-all"/"write-all"', 'severity': 'ERROR'})  # Fix 2: Renamed to InvalidPermissionsType
+            errors.append({'line': 0, 'type': 'InvalidPermissionsType', 'message': f'Permissions in {context} must be a mapping or "read-all"/"write-all"', 'severity': 'ERROR'})
         
         return errors
 
