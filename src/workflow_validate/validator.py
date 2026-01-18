@@ -1,8 +1,4 @@
-"""
-YAML Workflow Validator - Python 3.10+ Optimized
-Evolved to full syntax + schema validation with heuristic linting.
-Handles 2000+ line GitHub Actions workflows with guarantees.
-"""
+"""     YAML Workflow Validator - Python 3.10+ Optimized     Evolved to full syntax + schema validation with heuristic linting.     Handles 2000+ line GitHub Actions workflows with guarantees.     """
 
 import sys
 import json
@@ -11,12 +7,12 @@ from typing import TypedDict, Literal, Any, Dict
 from pathlib import Path
 from dataclasses import dataclass, field
 import re
-import glob
+import glob  # For batch mode globbing
 
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError, MarkedYAMLError
 
-# Type definitions
+# Type definitions (unchanged)
 class ValidationError(TypedDict):
     line: int
     type: str
@@ -123,8 +119,6 @@ class YAMLValidator:
         
         schema_errors = self._validate_schema(data)
         result['errors'].extend(schema_errors)
-        if schema_errors:
-            result['valid'] = False
         
         if isinstance(data, dict):
             struct = result['structure']
@@ -133,20 +127,12 @@ class YAMLValidator:
             struct['has_jobs'] = 'jobs' in data
             struct['has_env'] = 'env' in data
             
-            # FIX 1: Normalize 'jobs' - ruamel.yaml parses bare 'jobs:' as None
-            jobs_data = data.get('jobs') or {}
-            
-            struct['has_permissions'] = (
-                'permissions' in data or
-                any(
-                    isinstance(job, dict) and 'permissions' in job
-                    for job in jobs_data.values()
-                )
-            )
+            jobs = data.get('jobs') or {}  # Fix 1: Normalize to {} if None
+            struct['has_permissions'] = 'permissions' in data or any(isinstance(job, dict) and 'permissions' in job for job in jobs.values())
             
             if 'jobs' in data:
-                struct['jobs'] = sorted(jobs_data.keys())
-                struct['job_count'] = len(jobs_data)
+                struct['jobs'] = sorted(jobs.keys())
+                struct['job_count'] = len(jobs)
             
             triggers_set = set()
             if 'on' in data:
@@ -158,60 +144,62 @@ class YAMLValidator:
                 elif isinstance(on_value, dict):
                     triggers_set.update(on_value.keys())
             struct['triggers'] = sorted(triggers_set)
+        
+        in_jobs_section = False
+        
+        for line_num, line in enumerate(lines, start=1):
+            stripped = line.strip()
             
-            for line_num, line in enumerate(lines, start=1):
-                stripped = line.strip()
-                
-                # Count line types
-                if not stripped:
+            match stripped:
+                case '':
                     result['stats']['empty_lines'] += 1
                     continue
-                if stripped.startswith('#'):
+                case s if s.startswith('#'):
                     result['stats']['comment_lines'] += 1
                     continue
-                
-                result['stats']['code_lines'] += 1
-                
-                # Phase 3: Heuristic linting - warnings only
-                if '\t' in line:
-                    result['warnings'].append({
-                        'line': line_num,
-                        'type': 'TabWarning',
-                        'message': 'Tab character found - Consider using spaces for consistency'
-                    })
-                
-                if (dq_count := stripped.count('"')) % 2 != 0 and not stripped.endswith('\\'):
-                    result['warnings'].append({
-                        'line': line_num,
-                        'type': 'PossibleUnclosedString',
-                        'message': f'Odd number of double quotes ({dq_count}) detected'
-                    })
-                
-                if (sq_count := stripped.count("'")) % 2 != 0 and not stripped.endswith('\\'):
-                    result['warnings'].append({
-                        'line': line_num,
-                        'type': 'PossibleUnclosedString',
-                        'message': f'Odd number of single quotes ({sq_count}) detected'
-                    })
+                case _:
+                    result['stats']['code_lines'] += 1
             
-            # Empty jobs section warning
-            if result['structure']['has_jobs'] and result['structure']['job_count'] == 0:
+            if '\t' in line:
                 result['warnings'].append({
-                    'line': 0,
-                    'type': 'EmptyJobs',
-                    'message': 'Jobs section exists but no jobs detected (heuristic)'
+                    'line': line_num,
+                    'type': 'TabWarning',
+                    'message': 'Tab character found - Consider using spaces for consistency'
                 })
             
-            # Missing trigger warning
-            if not result['structure']['has_on']:
+            if (dq_count := stripped.count('"')) % 2 != 0 and not stripped.endswith('\\'):
                 result['warnings'].append({
-                    'line': 0,
-                    'type': 'NoTrigger',
-                    'message': 'No workflow trigger (on:) - workflow may not run automatically'
+                    'line': line_num,
+                    'type': 'PossibleUnclosedString',
+                    'message': f'Odd number of double quotes ({dq_count}) detected'
                 })
+            
+            if (sq_count := stripped.count("'")) % 2 != 0 and not stripped.endswith('\\'):
+                result['warnings'].append({
+                    'line': line_num,
+                    'type': 'PossibleUnclosedString',
+                    'message': f'Odd number of single quotes ({sq_count}) detected'
+                })
+            
+            match stripped:
+                case 'jobs:':
+                    in_jobs_section = True
         
-        # FIX 3: Phase purity enforcement - valid is True ONLY if no errors exist
-        # Warnings (Phase 3) NEVER affect validity
+        if result['structure']['has_jobs'] and result['structure']['job_count'] == 0:
+            result['warnings'].append({
+                'line': 0,
+                'type': 'EmptyJobs',
+                'message': 'Jobs section exists but no jobs detected (heuristic)'
+            })
+        
+        if not result['structure']['has_on']:
+            result['warnings'].append({
+                'line': 0,
+                'type': 'NoTrigger',
+                'message': 'No workflow trigger (on:) - workflow may not run automatically'
+            })
+        
+        # Fix 3: Explicitly enforce validity based only on errors (warnings don't count)
         result['valid'] = len(result['errors']) == 0
         
         return result
@@ -220,112 +208,51 @@ class YAMLValidator:
         errors = []
         
         if not isinstance(data, dict):
-            errors.append({
-                'line': 1,
-                'type': 'InvalidRoot',
-                'message': 'Workflow must be a mapping (dict)',
-                'severity': 'ERROR'
-            })
+            errors.append({'line': 1, 'type': 'InvalidRoot', 'message': 'Workflow must be a mapping (dict)', 'severity': 'ERROR'})
             return errors
         
-        # Required: 'on' trigger
         if 'on' not in data:
-            errors.append({
-                'line': 0,
-                'type': 'MissingOn',
-                'message': 'Required "on" trigger missing',
-                'severity': 'ERROR'
-            })
+            errors.append({'line': 0, 'type': 'MissingOn', 'message': 'Required "on" trigger missing', 'severity': 'ERROR'})
         else:
             on_value = data['on']
             if not isinstance(on_value, (str, list, dict)):
-                errors.append({
-                    'line': 0,
-                    'type': 'InvalidOn',
-                    'message': '"on" must be string, list, or dict',
-                    'severity': 'ERROR'
-                })
+                errors.append({'line': 0, 'type': 'InvalidOn', 'message': '"on" must be string, list, or dict', 'severity': 'ERROR'})
         
-        # Required: 'jobs' section
         if 'jobs' not in data:
-            errors.append({
-                'line': 0,
-                'type': 'MissingJobs',
-                'message': 'Required "jobs" section missing',
-                'severity': 'ERROR'
-            })
+            errors.append({'line': 0, 'type': 'MissingJobs', 'message': 'Required "jobs" section missing', 'severity': 'ERROR'})
         else:
             jobs = data['jobs']
             if not isinstance(jobs, dict):
-                errors.append({
-                    'line': 0,
-                    'type': 'InvalidJobs',
-                    'message': '"jobs" must be a mapping of job IDs to jobs',
-                    'severity': 'ERROR'
-                })
+                errors.append({'line': 0, 'type': 'InvalidJobs', 'message': '"jobs" must be a mapping of job IDs to jobs', 'severity': 'ERROR'})
             else:
                 for job_id, job in jobs.items():
                     if not isinstance(job, dict):
-                        errors.append({
-                            'line': 0,
-                            'type': 'InvalidJob',
-                            'message': f'Job "{job_id}" must be a mapping',
-                            'severity': 'ERROR'
-                        })
+                        errors.append({'line': 0, 'type': 'InvalidJob', 'message': f'Job "{job_id}" must be a mapping', 'severity': 'ERROR'})
                         continue
-                    
-                    # Job must have runs-on or uses
                     if 'runs-on' not in job and 'uses' not in job:
-                        errors.append({
-                            'line': 0,
-                            'type': 'MissingRunsOn',
-                            'message': f'Job "{job_id}" missing "runs-on" or "uses"',
-                            'severity': 'ERROR'
-                        })
-                    
-                    # Validate steps if present
+                        errors.append({'line': 0, 'type': 'MissingRunsOn', 'message': f'Job "{job_id}" missing "runs-on" or "uses"', 'severity': 'ERROR'})
                     if 'steps' in job:
                         steps = job['steps']
                         if not isinstance(steps, list):
-                            errors.append({
-                                'line': 0,
-                                'type': 'InvalidSteps',
-                                'message': f'Job "{job_id}" steps must be a list',
-                                'severity': 'ERROR'
-                            })
-                        else:
-                            for step_idx, step in enumerate(steps, start=1):
-                                if not isinstance(step, dict) or ('run' not in step and 'uses' not in step):
-                                    errors.append({
-                                        'line': 0,
-                                        'type': 'InvalidStep',
-                                        'message': f'Invalid step #{step_idx} in job "{job_id}": needs "run" or "uses"',
-                                        'severity': 'ERROR'
-                                    })
+                            errors.append({'line': 0, 'type': 'InvalidSteps', 'message': f'Job "{job_id}" steps must be a list', 'severity': 'ERROR'})
+                        for step_idx, step in enumerate(steps, start=1):
+                            if not isinstance(step, dict) or ('run' not in step and 'uses' not in step):
+                                errors.append({'line': 0, 'type': 'InvalidStep', 'message': f'Invalid step #{step_idx} in job "{job_id}": needs "run" or "uses"', 'severity': 'ERROR'})
                     
-                    # Validate job-level permissions
                     if 'permissions' in job:
                         perm_errors = self._validate_permissions(job['permissions'], context=f'job "{job_id}"')
                         errors.extend(perm_errors)
                     
-                    # Validate job-level strategy
                     if 'strategy' in job:
                         strat_errors = self._validate_strategy(job['strategy'], context=f'job "{job_id}"')
                         errors.extend(strat_errors)
         
-        # Validate workflow-level permissions
         if 'permissions' in data:
             perm_errors = self._validate_permissions(data['permissions'], context='workflow')
             errors.extend(perm_errors)
         
-        # Validate workflow-level env
         if 'env' in data and not isinstance(data['env'], dict):
-            errors.append({
-                'line': 0,
-                'type': 'InvalidEnv',
-                'message': '"env" must be a mapping',
-                'severity': 'ERROR'
-            })
+            errors.append({'line': 0, 'type': 'InvalidEnv', 'message': '"env" must be a mapping', 'severity': 'ERROR'})
         
         return errors
 
@@ -339,52 +266,20 @@ class YAMLValidator:
         VALID_LEVELS = {'read', 'write', 'none'}
         
         if isinstance(perms, str):
-            # Valid shorthand permissions
             if perms not in {'read-all', 'write-all'}:
-                errors.append({
-                    'line': 0,
-                    'type': 'InvalidPermissions',
-                    'message': f'Invalid permissions shorthand in {context}: must be "read-all" or "write-all"',
-                    'severity': 'ERROR'
-                })
+                errors.append({'line': 0, 'type': 'InvalidPermissions', 'message': f'Invalid permissions shorthand in {context}: must be "read-all" or "write-all"', 'severity': 'ERROR'})
         elif isinstance(perms, dict):
             seen_scopes = set()
             for scope, level in perms.items():
-                # Check for duplicate scopes
                 if scope in seen_scopes:
-                    errors.append({
-                        'line': 0,
-                        'type': 'DuplicateScope',
-                        'message': f'Duplicate scope "{scope}" in permissions for {context}',
-                        'severity': 'ERROR'
-                    })
+                    errors.append({'line': 0, 'type': 'DuplicateScope', 'message': f'Duplicate scope "{scope}" in permissions for {context}', 'severity': 'ERROR'})
                 seen_scopes.add(scope)
-                
-                # Check for valid scope
                 if scope not in VALID_SCOPES:
-                    errors.append({
-                        'line': 0,
-                        'type': 'InvalidScope',
-                        'message': f'Invalid scope "{scope}" in permissions for {context}',
-                        'severity': 'ERROR'
-                    })
-                
-                # Check for valid level
+                    errors.append({'line': 0, 'type': 'InvalidScope', 'message': f'Invalid scope "{scope}" in permissions for {context}', 'severity': 'ERROR'})
                 if level not in VALID_LEVELS:
-                    errors.append({
-                        'line': 0,
-                        'type': 'InvalidLevel',
-                        'message': f'Invalid level "{level}" for scope "{scope}" in {context}: must be read/write/none',
-                        'severity': 'ERROR'
-                    })
+                    errors.append({'line': 0, 'type': 'InvalidLevel', 'message': f'Invalid level "{level}" for scope "{scope}" in {context}: must be read/write/none', 'severity': 'ERROR'})
         else:
-            # FIX 2: Changed error type to match test expectation
-            errors.append({
-                'line': 0,
-                'type': 'InvalidPermissionsType',
-                'message': f'Permissions in {context} must be a mapping or "read-all"/"write-all"',
-                'severity': 'ERROR'
-            })
+            errors.append({'line': 0, 'type': 'InvalidPermissionsType', 'message': f'Permissions in {context} must be a mapping or "read-all"/"write-all"', 'severity': 'ERROR'})  # Fix 2: Renamed to InvalidPermissionsType
         
         return errors
 
@@ -392,73 +287,32 @@ class YAMLValidator:
         errors = []
         
         if not isinstance(strategy, dict):
-            errors.append({
-                'line': 0,
-                'type': 'InvalidStrategy',
-                'message': f'Strategy in {context} must be a mapping',
-                'severity': 'ERROR'
-            })
+            errors.append({'line': 0, 'type': 'InvalidStrategy', 'message': f'Strategy in {context} must be a mapping', 'severity': 'ERROR'})
             return errors
         
-        # Validate fail-fast
         if 'fail-fast' in strategy and not isinstance(strategy['fail-fast'], bool):
-            errors.append({
-                'line': 0,
-                'type': 'InvalidFailFast',
-                'message': f'"fail-fast" in strategy for {context} must be a boolean',
-                'severity': 'ERROR'
-            })
+            errors.append({'line': 0, 'type': 'InvalidFailFast', 'message': f'"fail-fast" in strategy for {context} must be a boolean', 'severity': 'ERROR'})
         
-        # Validate max-parallel
         if 'max-parallel' in strategy:
             max_par = strategy['max-parallel']
             if not isinstance(max_par, int) or max_par <= 0:
-                errors.append({
-                    'line': 0,
-                    'type': 'InvalidMaxParallel',
-                    'message': f'"max-parallel" in strategy for {context} must be a positive integer',
-                    'severity': 'ERROR'
-                })
+                errors.append({'line': 0, 'type': 'InvalidMaxParallel', 'message': f'"max-parallel" in strategy for {context} must be a positive integer', 'severity': 'ERROR'})
         
-        # Validate continue-on-error
         if 'continue-on-error' in strategy and not isinstance(strategy['continue-on-error'], bool):
-            errors.append({
-                'line': 0,
-                'type': 'InvalidContinueOnError',
-                'message': f'"continue-on-error" in strategy for {context} must be a boolean (expressions not supported by validator)',
-                'severity': 'ERROR'
-            })
+            errors.append({'line': 0, 'type': 'InvalidContinueOnError', 'message': f'"continue-on-error" in strategy for {context} must be a boolean (expressions not supported by validator)', 'severity': 'ERROR'})
         
-        # Validate matrix
         if 'matrix' in strategy:
             matrix = strategy['matrix']
             if not isinstance(matrix, dict):
-                errors.append({
-                    'line': 0,
-                    'type': 'InvalidMatrix',
-                    'message': f'"matrix" in strategy for {context} must be a mapping',
-                    'severity': 'ERROR'
-                })
+                errors.append({'line': 0, 'type': 'InvalidMatrix', 'message': f'"matrix" in strategy for {context} must be a mapping', 'severity': 'ERROR'})
             else:
                 for var_name, variants in matrix.items():
                     if var_name in {'include', 'exclude'}:
-                        # include/exclude must be list of mappings
                         if not isinstance(variants, list) or not all(isinstance(item, dict) for item in variants):
-                            errors.append({
-                                'line': 0,
-                                'type': 'InvalidMatrixSpecial',
-                                'message': f'"{var_name}" in matrix for {context} must be a list of mappings',
-                                'severity': 'ERROR'
-                            })
+                            errors.append({'line': 0, 'type': 'InvalidMatrixSpecial', 'message': f'"{var_name}" in matrix for {context} must be a list of mappings', 'severity': 'ERROR'})
                     else:
-                        # Regular matrix vars must be list of scalars
                         if not isinstance(variants, list) or not all(isinstance(item, (str, int, bool)) for item in variants):
-                            errors.append({
-                                'line': 0,
-                                'type': 'InvalidMatrixVariants',
-                                'message': f'Variants for "{var_name}" in matrix for {context} must be a list of strings/ints/bools',
-                                'severity': 'ERROR'
-                            })
+                            errors.append({'line': 0, 'type': 'InvalidMatrixVariants', 'message': f'Variants for "{var_name}" in matrix for {context} must be a list of strings/ints/bools', 'severity': 'ERROR'})
         
         return errors
 
@@ -474,39 +328,18 @@ class YAMLValidator:
             else:
                 paths.append(p)
         
-        # Deduplicate and sort for determinism
-        yaml_paths = sorted(set(p for p in paths if p.suffix in {'.yml', '.yaml'}))
+        yaml_paths = [p for p in sorted(set(paths)) if p.suffix in {'.yml', '.yaml'}]  # Dedupe, sort for determinism
         
         if not yaml_paths:
-            # Return structured error for no files found
-            return {
-                'no_files': {
-                    'valid': False,
-                    'errors': [{
-                        'line': 0,
-                        'type': 'NoFilesFound',
-                        'message': f'No YAML files matched pattern: {pattern}',
-                        'severity': 'ERROR'
-                    }],
-                    'warnings': [],
-                    'stats': {
-                        'total_lines': 0,
-                        'empty_lines': 0,
-                        'comment_lines': 0,
-                        'code_lines': 0
-                    },
-                    'structure': {
-                        'has_name': False,
-                        'has_on': False,
-                        'has_jobs': False,
-                        'has_env': False,
-                        'has_permissions': False,
-                        'job_count': 0,
-                        'jobs': [],
-                        'triggers': []
-                    }
-                }
-            }
+            print("No matching YAML files found", file=sys.stderr)
+            # Return structured error
+            return {'no_files': {
+                'valid': False,
+                'errors': [{'line': 0, 'type': 'NoFilesFound', 'message': f'No YAML files matched pattern: {pattern}', 'severity': 'ERROR'}],
+                'warnings': [],
+                'stats': {'total_lines': 0, 'empty_lines': 0, 'comment_lines': 0, 'code_lines': 0},
+                'structure': {'has_name': False, 'has_on': False, 'has_jobs': False, 'has_env': False, 'has_permissions': False, 'job_count': 0, 'jobs': [], 'triggers': []}
+            }}
         
         batch_results: Dict[str, ValidationResult] = {}
         for file_path in yaml_paths:
@@ -526,7 +359,6 @@ class YAMLValidator:
         print("=" * 70)
         print()
         
-        # File statistics
         print(f"{INFO} FILE STATISTICS")
         stats = result['stats']
         print(f"  Total lines:     {stats['total_lines']:,}")
@@ -535,7 +367,6 @@ class YAMLValidator:
         print(f"  Comment lines:   {stats['comment_lines']:,}")
         print()
         
-        # GitHub Actions structure
         print("🔧 GITHUB ACTIONS STRUCTURE")
         struct = result['structure']
         
@@ -561,7 +392,6 @@ class YAMLValidator:
         
         print()
         
-        # Phase 1: Syntax validation
         print("🔍 PHASE 1: SYNTAX VALIDATION")
         syntax_errors = [e for e in result['errors'] if e['type'] == 'YAMLSyntaxError']
         if not syntax_errors:
@@ -575,7 +405,6 @@ class YAMLValidator:
         
         print()
         
-        # Phase 2: Schema validation
         print("🔍 PHASE 2: SCHEMA VALIDATION")
         schema_errors = [e for e in result['errors'] if e['type'] != 'YAMLSyntaxError']
         if not schema_errors:
@@ -589,12 +418,12 @@ class YAMLValidator:
         
         print()
         
-        # Phase 3: Lint warnings
         if warnings := result['warnings']:
             print(f"{WARNING} PHASE 3: LINT WARNINGS ({len(warnings)} found):")
             for i, warning in enumerate(warnings[:10], start=1):
                 line_info = f"Line {warning['line']}" if warning['line'] > 0 else "General"
                 print(f"  {i}. {line_info}: {warning['message']}")
+            
             if len(warnings) > 10:
                 print(f"  ... and {len(warnings) - 10} more warnings")
         else:
@@ -603,7 +432,6 @@ class YAMLValidator:
         print()
         print("=" * 70)
         
-        # Final result
         if result['valid']:
             print(f"{CHECK} RESULT: WORKFLOW IS VALID AND READY TO USE")
         else:
@@ -612,73 +440,53 @@ class YAMLValidator:
         print("=" * 70)
 
     def print_json(self, result: Any, file_path: Path | None = None) -> None:
-        """JSON output with sort_keys for determinism."""
+        """JSON output (refined for batch, with sort_keys for determinism)."""
         json_output = dict(result)  # Safe copy
-        json_output["version"] = "1.0"  # Explicit version
+        json_output["version"] = "1.0"  # Explicit set
         print(json.dumps(json_output, indent=2, sort_keys=True))
         
-        # GitHub Actions annotations
         if os.getenv('GITHUB_ACTIONS') == 'true':
-            if isinstance(result, dict) and 'files' in result:
-                # Batch mode annotations
+            if isinstance(result, dict) and 'files' in result:  # Batch mode
                 for f_path, f_result in result['files'].items():
                     for error in f_result['errors']:
                         line = error['line'] if error['line'] > 0 else 1
                         kind = 'error' if error['severity'] == 'ERROR' else 'warning'
-                        print(
-                            f"::{kind} file={f_path},line={line}::{error['type']}: {error['message']}",
-                            file=sys.stderr
-                        )
+                        print(f"::{kind} file={f_path},line={line}::{error['type']}: {error['message']}", file=sys.stderr)
                     for warning in f_result['warnings']:
                         line = warning['line'] if warning['line'] > 0 else 1
-                        print(
-                            f"::warning file={f_path},line={line}::{warning['type']}: {warning['message']}",
-                            file=sys.stderr
-                        )
-            else:
-                # Single file annotations
+                        print(f"::warning file={f_path},line={line}::{warning['type']}: {warning['message']}", file=sys.stderr)
+            else:  # Single file
                 for error in result['errors']:
                     line = error['line'] if error['line'] > 0 else 1
                     kind = 'error' if error['severity'] == 'ERROR' else 'warning'
-                    print(
-                        f"::{kind} file={file_path},line={line}::{error['type']}: {error['message']}",
-                        file=sys.stderr
-                    )
+                    print(f"::{kind} file={file_path},line={line}::{error['type']}: {error['message']}", file=sys.stderr)
                 for warning in result['warnings']:
                     line = warning['line'] if warning['line'] > 0 else 1
-                    print(
-                        f"::warning file={file_path},line={line}::{warning['type']}: {warning['message']}",
-                        file=sys.stderr
-                    )
+                    print(f"::warning file={file_path},line={line}::{warning['type']}: {warning['message']}", file=sys.stderr)
 
 def main() -> int:
-    """CLI entry point."""
-    # Python version check
     if sys.version_info < (3, 10):
         print("❌ This script requires Python 3.10 or higher")
         print(f"   Current version: {sys.version}")
         print("   Please upgrade Python to use this validator")
         return 1
     
-    # Usage check
     if len(sys.argv) < 2:
         print("Usage: gh workflow-validate <file.yml | --batch <pattern>> [--verbose|-v] [--json|-j]")
         return 1
     
     arg1 = sys.argv[1]
     batch_mode = arg1 == '--batch'
-    
     if batch_mode:
         if len(sys.argv) < 3:
             print("Batch mode requires a pattern: --batch <pattern>")
             return 1
         pattern = sys.argv[2]
-        file_path = None
+        file_path = None  # No single path
     else:
         pattern = arg1
         file_path = Path(pattern)
     
-    # Parse flags
     verbose = '--verbose' in sys.argv or '-v' in sys.argv
     json_mode = '--json' in sys.argv or '-j' in sys.argv
     
@@ -687,14 +495,9 @@ def main() -> int:
     if batch_mode:
         print(f"Batch validating: {pattern}")
         results = validator.validate_batch(pattern)
-        
         if 'no_files' in results:
             overall_valid = False
-            aggregated = {
-                "files": {},
-                "overall_valid": overall_valid,
-                "error": results['no_files']['errors'][0]['message']
-            }
+            aggregated = {"files": {}, "overall_valid": overall_valid, "error": results['no_files']['errors'][0]['message']}
         else:
             overall_valid = all(r['valid'] for r in results.values())
             aggregated = {"files": results, "overall_valid": overall_valid}
@@ -708,22 +511,16 @@ def main() -> int:
     print("Processing...")
     print()
     
-    # Output format
     if json_mode:
         validator.print_json(aggregated, file_path)
     else:
         if batch_mode:
-            if 'no_files' in results:
-                print("\n--- Error ---")
-                print(results['no_files']['errors'][0]['message'])
-            else:
-                for f_path, f_result in sorted(results.items()):
-                    print(f"\n--- {f_path} ---")
-                    validator.print_report(f_result, verbose=verbose)
-                print("\n--- Summary ---")
-                print(f"Overall valid: {'✅' if overall_valid else '❌'} ({len(results)} files)")
+            for f_path, f_result in sorted(results.items()):  # Sorted for determinism
+                print(f"\n--- {f_path} ---")
+                validator.print_report(f_result, verbose=verbose)
+            print("\n--- Summary ---")
+            print(f"Overall valid: {'✅' if overall_valid else '❌'} ({len(results)} files)")
         else:
             validator.print_report(results, verbose=verbose)
     
-    # Exit code: 0 if valid, 1 otherwise
     return 0 if overall_valid else 1
