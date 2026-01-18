@@ -1,0 +1,6 @@
+include README.md
+include LICENSE
+include CHANGELOG.md
+include workflow-validator-output.schema.json
+recursive-include tests *.py
+recursive-include examples *.yml
