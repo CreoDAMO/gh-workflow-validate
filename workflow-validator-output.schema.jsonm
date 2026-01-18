@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/workflow-validator-output.schema.json",
+  "title": "Workflow Validator Output",
+  "description": "Stable JSON output from the GitHub Actions Workflow Validator tool.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "description": "Output format version (fixed for stability).",
+      "type": "string",
+      "const": "1.0"
+    }
+  },
+  "required": ["version"],
+  "oneOf": [
+    { "$ref": "#/$defs/singleFileOutput" },
+    { "$ref": "#/$defs/batchOutput" }
+  ],
+  "$defs": {
+    "singleFileOutput": {
+      "type": "object",
+      "properties": {
+        "valid": {
+          "description": "True if the workflow passed all phases (syntax + schema); false otherwise.",
+          "type": "boolean"
+        },
+        "errors": {
+          "description": "List of errors from Phase 1 (syntax) and Phase 2 (schema). Empty if valid.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/validationError" }
+        },
+        "warnings": {
+          "description": "List of warnings from Phase 3 (linting/heuristics). Non-blocking.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/validationWarning" }
+        },
+        "stats": { "$ref": "#/$defs/fileStats" },
+        "structure": { "$ref": "#/$defs/workflowStructure" }
+      },
+      "required": ["valid", "errors", "warnings", "stats", "structure"]
+    },
+    "batchOutput": {
+      "type": "object",
+      "properties": {
+        "files": {
+          "description": "Dict of file paths (str) to per-file ValidationResult.",
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "valid": { "type": "boolean" },
+              "errors": { "type": "array", "items": { "$ref": "#/$defs/validationError" } },
+              "warnings": { "type": "array", "items": { "$ref": "#/$defs/validationWarning" } },
+              "stats": { "$ref": "#/$defs/fileStats" },
+              "structure": { "$ref": "#/$defs/workflowStructure" }
+            },
+            "required": ["valid", "errors", "warnings", "stats", "structure"]
+          }
+        },
+        "overall_valid": {
+          "description": "True if all files are valid; false if any failed.",
+          "type": "boolean"
+        }
+      },
+      "required": ["files", "overall_valid"]
+    },
+    "validationError": {
+      "type": "object",
+      "properties": {
+        "line": {
+          "description": "Line number (1-indexed; 0 for general/document-level).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "type": {
+          "description": "Error type (e.g., 'YAMLSyntaxError', 'MissingOn', 'InvalidPermissions').",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable error message.",
+          "type": "string"
+        },
+        "severity": {
+          "description": "Currently always 'ERROR' for errors; 'WARNING' reserved for future levels.",
+          "type": "string",
+          "enum": ["ERROR", "WARNING"]
+        }
+      },
+      "required": ["line", "type", "message", "severity"]
+    },
+    "validationWarning": {
+      "type": "object",
+      "properties": {
+        "line": {
+          "description": "Line number (1-indexed; 0 for general).",
+          "type": "integer",
+          "minimum": 0
+        },
+        "type": {
+          "description": "Warning type (e.g., 'TabWarning', 'PossibleUnclosedString').",
+          "type": "string"
+        },
+        "message": {
+          "description": "Human-readable warning message.",
+          "type": "string"
+        }
+      },
+      "required": ["line", "type", "message"]
+    },
+    "fileStats": {
+      "type": "object",
+      "properties": {
+        "total_lines": { "type": "integer", "minimum": 0 },
+        "empty_lines": { "type": "integer", "minimum": 0 },
+        "comment_lines": { "type": "integer", "minimum": 0 },
+        "code_lines": { "type": "integer", "minimum": 0 }
+      },
+      "required": ["total_lines", "empty_lines", "comment_lines", "code_lines"]
+    },
+    "workflowStructure": {
+      "type": "object",
+      "properties": {
+        "has_name": { "type": "boolean" },
+        "has_on": { "type": "boolean" },
+        "has_jobs": { "type": "boolean" },
+        "has_env": { "type": "boolean" },
+        "has_permissions": { "type": "boolean" },
+        "job_count": { "type": "integer", "minimum": 0 },
+        "jobs": { "type": "array", "items": { "type": "string" } },
+        "triggers": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["has_name", "has_on", "has_jobs", "has_env", "has_permissions", "job_count", "jobs", "triggers"]
+    }
+  }
+}
